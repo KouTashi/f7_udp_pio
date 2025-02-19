@@ -1,2 +1,2 @@
 # 概要
-f7_udpのmbed側コード（PlatformIO版）です。
+f7_udpのmbed側コード群（PlatformIO版）です。
