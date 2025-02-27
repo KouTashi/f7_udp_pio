@@ -1,3 +1,94 @@
+// /* ヘッダーファイル読み込み */
+// #include "mbed.h"
+
+// /* ピンの機能設定  */
+// BufferedSerial PC (USBTX,USBRX,115200);            //USB :シリアル通信
+// DigitalOut USSTriger (PE_2);         //P11 :超音波センサ トリガ出力
+// Timer ActiveTime;
+
+// /* 割り込み処理宣言 */
+// Ticker TrigerTiming;                //Trigerピン :インターバルタイマ
+// InterruptIn USSEcho (PE_4);          //p12 :超音波センサ  エコー入力
+
+// /* 関数宣言 */
+// void init(void);
+// void Output_Monitor(unsigned short Value);
+
+// /* グローバル変数宣言*/
+// unsigned short USSDistance;         //USSDistance:超音波センサ測定距離
+
+// /* main関数開始*/
+// int main() {
+//                          //val:PC.readable初期化用変数
+//     init();
+//     while(1) {
+//         if( PC.readable() ){
+//             Output_Monitor( USSDistance );
+//         }
+//     }
+// }
+
+
+// /***************************************************
+//  * @brief       60ms毎の割り込みでUSSTrigerに10usのON出力
+//  * @param       なし
+//  * @return      なし
+//  * @date 2014/12/16 新規作成
+//  **************************************************/
+// void Triger (){
+//     USSTriger = 1;
+//     wait_us(10);
+//     USSTriger = 0;
+// }
+
+// /***************************************************
+//  * @brief       USSEcho立ち上がりでの割り込み
+//  * @brief       Hiの場合ActiveTimeタイマスタート
+//  * @param       なし
+//  * @return      なし
+//  * @date 2014/12/16 新規作成
+//  **************************************************/
+// void RiseEcho(){
+//     ActiveTime.start();
+// }
+
+// /***************************************************
+//  * @brief       USSEcho立ち下がりでの割り込み
+//  * @brief       Lowの場合ActiveTimeタイマ停止+値読み取り
+//  * @param       なし
+//  * @return      なし
+//  * @date 2014/12/16 新規作成
+//  **************************************************/
+// void FallEcho(){
+//     unsigned long ActiveWidth;
+//     ActiveTime.stop();
+//     ActiveWidth = ActiveTime.read_us();
+//     USSDistance = ActiveWidth * 0.0170;
+//     ActiveTime.reset();
+// }
+
+// /***************************************************
+//  * @brief       各種機能のプロパティ設定
+//  * @param       なし
+//  * @return      なし
+//  * @date 2014/12/13 新規作成
+//  **************************************************/
+// void init(void){   
+//     TrigerTiming.attach( Triger , 0.060 );      //USSTriger周期 60ms
+//     USSEcho.rise( RiseEcho );                   //USSEcho立ち上がり時割り込み
+//     USSEcho.fall( FallEcho );                   //USSEcho立ち下がり時割り込み
+// }
+
+// /***************************************************
+//  * @brief       Parameterの値をPC画面に出力
+//  * @param       Value : 画面に出力する値
+//  * @return      なし
+//  * @date 2014/12/14 新規作成
+//  **************************************************/
+// void Output_Monitor(unsigned short Value){
+//     printf("%d[cm]\r\n",Value);
+// }
+
 /*
 RRST NHK2025
 IPアドレスは適宜変更すること
@@ -7,7 +98,6 @@ IPアドレスは適宜変更すること
 */
 
 #include "EthernetInterface.h"
-#include "QEI.h"
 #include "mbed.h"
 #include "rtos.h"
 #include <cstdint>
@@ -15,21 +105,8 @@ IPアドレスは適宜変更すること
 
 #define PI 3.141592653589793
 
-//---------------------------QEI---------------------------//
-QEI ENC1(PC_0, PG_1, NC, 2048, QEI::X4_ENCODING);
-QEI ENC2(PF_2, PC_3, NC, 2048, QEI::X4_ENCODING);
-QEI ENC3(PD_4, PF_5, NC, 2048, QEI::X4_ENCODING);
-QEI ENC4(PA_6, PF_7, NC, 2048, QEI::X4_ENCODING);
-QEI ENC5(PE_8, PF_9, NC, 2048, QEI::X4_ENCODING);
-QEI ENC6(PF_10, PD_11, NC, 2048, QEI::X4_ENCODING);
-
-/*
-QEI (A_ch, B_ch, index, int pulsesPerRev, QEI::X2_ENCODING)
-index -> Xピン, １回転ごとに１パルス出力される？ 使わない場合はNCでok
-pulsePerRev -> Resolution (PPR)を指す
-X4も可,X4のほうが細かく取れる
-データシート: https://jp.cuidevices.com/product/resource/amt10-v.pdf
-*/
+float v[5] = {0.0, 0.0, 0.0, 0.0, 0.0}; // 速度の格納[mm/s]
+float d[5] = {0.0, 0.0, 0.0, 0.0, 0.0}; // 変位[m]
 
 void receive(UDPSocket *receiver);
 
@@ -74,15 +151,6 @@ DigitalOut TR8(PF_13);
 // CAN
 CAN can{PD_0, PD_1, (int)1e6}; // rd,td,1Mhz
 
-// グローバル変数の定義
-float Pulse[6]; // エンコーダーのパルス格納用
-float v[5] = {0.0, 0.0, 0.0, 0.0, 0.0}; // 速度の格納[mm/s]
-float d[5] = {0.0, 0.0, 0.0, 0.0, 0.0}; // 変位[m]
-
-float period = 10; // 制御周期[ms]
-float R = 80;      // オムニ直径[mm]
-int PPRx4 = 8192;  // エンコーダーのResolution
-
 double mdd[7]; // MDに出力する方向指令を格納
 double mdp[7]; // MDに出力するduty比を格納
 
@@ -111,12 +179,12 @@ int main() {
   SERVO4.period_ms(20);
 
   // 送信先情報
-  const char *destinationIP = "192.168.8.195";
+  const char *destinationIP = "192.168.0.195";
   const uint16_t destinationPort = 4000;
 
   // 自機情報
-  //const char *myIP = "192.168.8.215"; // MR
-  const char *myIP = "192.168.0.217"; // DR
+  //const char *myIP = "192.168.0.215"; // MR
+  const char *myIP = "192.168.0.218"; // DR
   //const char *myIP = "192.168.128.215"; // DR on test
   const char *myNetMask = "255.255.255.0";
   const uint16_t receivePort = 5000;
@@ -157,33 +225,7 @@ int main() {
   // メインループ（送信用）
   while (1) {
     using namespace std::chrono;
-
-    // エンコーダーの値を取得
-    Pulse[1] = float(ENC1.getPulses());
-    Pulse[2] = float(ENC2.getPulses());
-    Pulse[3] = float(ENC3.getPulses());
-    Pulse[4] = float(ENC4.getPulses());
-
-    v[1] = Pulse[1] * (R * PI / PPRx4) *
-           (1000 / period); // エンコーダーのパルスから速度[mm/s]を計算
-    v[2] = Pulse[2] * (R * PI / PPRx4) *
-           (1000 / period); // エンコーダーのパルスから速度[mm/s]を計算
-    v[3] = Pulse[3] * (R * PI / PPRx4) *
-           (1000 / period); // エンコーダーのパルスから速度[mm/s]を計算
-    v[4] = Pulse[4] * (R * PI / PPRx4) *
-           (1000 / period); // エンコーダーのパルスから速度[mm/s]を計算
-
-    d[1] += Pulse[1] * R * PI / PPRx4 / 1000; //変位[m]
-    d[2] += Pulse[2] * R * PI / PPRx4 / 1000; //変位[m]
-    d[3] += Pulse[3] * R * PI / PPRx4 / 1000; //変位[m]
-    d[4] += Pulse[4] * R * PI / PPRx4 / 1000; //変位[m]
-
-    // エンコーダーをリセット
-    ENC1.reset();
-    ENC2.reset();
-    ENC3.reset();
-    ENC4.reset();
-
+   
     // 速度データをカンマ区切りの文字列に変換
     char sendData[128]; // 送信データを格納する配列
     snprintf(sendData, sizeof(sendData), "%f,%f,%f,%f,%f,%f,%f,%f,", v[1], v[2],
@@ -198,7 +240,6 @@ int main() {
       printf("send Error: %d\n", result); // エラー処理
     }
 
-    ThisThread::sleep_for(period); // 制御周期に合わせて待機
   }
 
   // スレッドの終了を待つ
